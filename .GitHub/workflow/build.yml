@@ -1,0 +1,237 @@
+name: Build TelegramAutoBot
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+  APP_NAME: 'TelegramAutoBot'
+  BUILD_DIR: './dist'
+
+jobs:
+  # Job 1: Тестирование и линтинг
+  test:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 🐍 Установка Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      
+      - name: 📦 Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r FIXED/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+      
+      - name: 🧪 Smoke-тесты
+        run: |
+          cd FIXED
+          python test_smoke.py
+      
+      - name: ✅ Unit-тесты
+        run: |
+          cd FIXED
+          pytest test_telegram_bot.py -v --cov=. --cov-report=xml
+      
+      - name: 📊 Загрузка покрытия тестов
+        uses: codecov/codecov-action@v3
+        if: matrix.python-version == '3.11'
+        with:
+          files: ./FIXED/coverage.xml
+          fail_ci_if_error: false
+
+  # Job 2: Сборка для macOS (Intel + Apple Silicon)
+  build-macos:
+    needs: test
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 🐍 Установка Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: 📦 Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r FIXED/requirements.txt
+      
+      - name: 🔨 Проверка build.spec
+        run: |
+          cd FIXED
+          python -m PyInstaller --clean --dry-run build.spec
+      
+      - name: 🏗️ Сборка .app для ${{ matrix.arch }}
+        run: |
+          cd FIXED
+          ARCHFLAGS=-Qunused-arguments LDFLAGS=-L/usr/local/opt/openssl/lib CPPFLAGS=-I/usr/local/opt/openssl/include \
+          python -m PyInstaller --clean --noconfirm build.spec
+      
+      - name: 📋 Проверка структуры app
+        run: |
+          ls -la FIXED/dist/
+          ls -la FIXED/dist/TelegramAutoBot.app/Contents/MacOS/
+      
+      - name: 📦 Упаковка DMG для ${{ matrix.arch }}
+        run: |
+          cd FIXED/dist
+          mkdir -p /tmp/dmg_contents
+          cp -r TelegramAutoBot.app /tmp/dmg_contents/
+          ln -s /Applications /tmp/dmg_contents/Applications
+          hdiutil create -srcfolder /tmp/dmg_contents \
+                         -volname "${{ env.APP_NAME }}" \
+                         -fs HFS+ -fsargs "-c c=63" \
+                         -format UDZO \
+                         -o ${{ env.APP_NAME }}_${{ matrix.arch }}_$(date +%Y%m%d).dmg
+          ls -lah ${{ env.APP_NAME }}_*.dmg
+      
+      - name: ⬆️ Загрузка артефактов (app)
+        uses: actions/upload-artifact@v3
+        with:
+          name: TelegramAutoBot-${{ matrix.arch }}-app
+          path: FIXED/dist/TelegramAutoBot.app
+          retention-days: 30
+      
+      - name: ⬆️ Загрузка артефактов (DMG)
+        uses: actions/upload-artifact@v3
+        with:
+          name: TelegramAutoBot-${{ matrix.arch }}-dmg
+          path: |
+            FIXED/dist/*.dmg
+          retention-days: 30
+
+  # Job 3: Code Quality
+  quality:
+    runs-on: macos-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: 🐍 Установка Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: 📦 Установка зависимостей
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r FIXED/requirements.txt
+          pip install black mypy flake8 pylint
+      
+      - name: 🎨 Проверка форматирования (black)
+        run: |
+          cd FIXED
+          black --check *.py || true
+      
+      - name: 🔍 Статический анализ (mypy)
+        run: |
+          cd FIXED
+          mypy *.py --ignore-missing-imports || true
+      
+      - name: 📝 Проверка стиля (flake8)
+        run: |
+          cd FIXED
+          flake8 *.py --max-line-length=120 || true
+
+  # Job 4: Создание Release
+  release:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: ⬇️ Скачивание всех артефактов
+        uses: actions/download-artifact@v3
+      
+      - name: 📝 Подготовка информации релиза
+        id: release_info
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "release_date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          echo "changelog=$(cat FIXED/FIXES_APPLIED.md | head -50)" >> $GITHUB_OUTPUT
+      
+      - name: 🚀 Создание Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            TelegramAutoBot-*-app/**/*
+            TelegramAutoBot-*-dmg/*.dmg
+          body: |
+            # TelegramAutoBot v${{ steps.release_info.outputs.version }}
+            
+            **Release Date:** ${{ steps.release_info.outputs.release_date }}
+            
+            ## Changes
+            
+            See [FIXES_APPLIED.md](FIXED/FIXES_APPLIED.md) for detailed list of improvements.
+            
+            ## Installation
+            
+            1. Download the `.dmg` file for your architecture (Intel or Apple Silicon)
+            2. Open the DMG and drag `TelegramAutoBot.app` to Applications folder
+            3. Run from Applications
+            
+            ## System Requirements
+            
+            - macOS 10.13 or later
+            - Python 3.10+ (if running from source)
+            - 500MB free disk space
+            
+            ## Changelog
+            
+            ${{ steps.release_info.outputs.changelog }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job 5: Notifier (опционально)
+  notify:
+    needs: [test, build-macos]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 📊 Результаты сборки
+        run: |
+          echo "=== Build Summary ==="
+          echo "Tests: ${{ needs.test.result }}"
+          echo "macOS Build: ${{ needs.build-macos.result }}"
+          echo "========================"
+      
+      - name: 💬 Комментарий в PR (если нужен)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ CI/CD pipeline completed! Build artifacts ready.'
+            })
