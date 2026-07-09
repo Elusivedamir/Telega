@@ -1,0 +1,27 @@
+# ✅ ОБНОВЛЕНО: более стабильные версии и добавлена cryptography для шифрования
+
+# GUI Framework
+PyQt6>=6.7.0
+PyQt6-Qt6>=6.7.0
+PyQt6-sip>=13.7.0
+
+# Telegram API
+Telethon>=1.38.0,<2.0.0
+
+# Crypto & Security
+cryptography>=42.0.0
+keyring>=25.1.0
+pysocks>=1.7.1
+cryptg>=0.4.0
+
+# Async
+qasync>=0.27.0
+
+# Building
+pyinstaller>=6.1.0
+
+# Optional: для удобства разработки (не обязательно)
+# pytest>=7.4.0
+# pytest-asyncio>=0.23.0
+# mypy>=1.7.0
+# black>=23.12.0
