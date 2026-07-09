@@ -12,6 +12,7 @@ env:
   PYTHON_VERSION: '3.11'
   APP_NAME: 'TelegramAutoBot'
   BUILD_DIR: './dist'
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   # Job 1: Тестирование и линтинг
@@ -140,53 +141,3 @@ jobs:
       
       - name: 📝 Проверка стиля (flake8)
         run: flake8 *.py --max-line-length=120 || true
-
-  # Job 4: Создание Release
-  release:
-    needs: build-macos
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: ⬇️ Скачивание всех артефактов
-        uses: actions/download-artifact@v3
-      
-      - name: 📝 Подготовка информации релиза
-        id: release_info
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "release_date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-          # Если есть файл с логами изменений в корне
-          if [ -f "FIXES_APPLIED.md" ]; then
-             echo "changelog=$(cat FIXES_APPLIED.md | head -50)" >> $GITHUB_OUTPUT
-          else
-             echo "changelog=Release $VERSION" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: 🚀 Создание Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            TelegramAutoBot-*-app/**/*
-            TelegramAutoBot-*-dmg/*.dmg
-          body: |
-            # TelegramAutoBot v${{ steps.release_info.outputs.version }}
-            
-            **Release Date:** ${{ steps.release_info.outputs.release_date }}
-            
-            ## Installation
-            
-            1. Download the `.dmg` file for your architecture (Intel or Apple Silicon)
-            2. Open the DMG and drag `TelegramAutoBot.app` to Applications folder
-            3. Run from Applications
-            
-            ## Changelog
-            
-            ${{ steps.release_info.outputs.changelog }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
